@@ -622,6 +622,39 @@
     font-size: 0.98rem;
     padding: 10px 10px 20px;
   }
+
+  /* ---------- council sign-in ---------- */
+  .auth-btn {
+    font-family: 'Work Sans', sans-serif;
+    font-size: 0.82rem;
+    padding: 6px 13px;
+    border-radius: 20px;
+    border: none;
+    background: rgba(250, 243, 227, 0.72);
+    color: #3a2914;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .auth-btn:hover { background: rgba(250, 243, 227, 0.95); }
+  .auth-btn.signed-in { background: var(--ribbon-ok); color: #fff; }
+
+  .lock-note {
+    grid-column: 1 / -1;
+    text-align: center;
+    color: rgba(250,243,227,0.75);
+    font-family: 'Work Sans', sans-serif;
+    font-size: 0.82rem;
+    padding: 6px 10px 4px;
+  }
+
+  .auth-error {
+    color: var(--pin-red);
+    font-size: 0.8rem;
+    margin: -6px 0 10px;
+    display: none;
+  }
 </style>
 </head>
 <body>
@@ -651,6 +684,7 @@
           <button class="filter-btn" data-filter="open">Open</button>
           <button class="filter-btn" data-filter="done">Done</button>
         </div>
+        <button class="auth-btn" id="authBtn">🔒 Council sign in</button>
       </div>
 
       <div class="grid" id="grid">
@@ -668,6 +702,26 @@
       <div class="sticky-grid" id="stickyGrid">
         <!-- sticky notes injected here -->
       </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="authOverlay">
+  <div class="modal">
+    <button class="modal-close" id="authModalClose" aria-label="Close">✕</button>
+    <h3>Council sign in</h3>
+    <div class="field">
+      <label for="authEmail">Email</label>
+      <input type="text" id="authEmail" placeholder="you@yourcouncil.com" autocomplete="username">
+    </div>
+    <div class="field">
+      <label for="authPassword">Password</label>
+      <input type="text" id="authPassword" placeholder="Password" autocomplete="current-password" style="-webkit-text-security: disc;">
+    </div>
+    <p class="auth-error" id="authError">That email/password didn't work — try again.</p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="authCancelBtn">Cancel</button>
+      <button class="btn primary" id="authSignInBtn">Sign in</button>
     </div>
   </div>
 </div>
@@ -729,6 +783,9 @@ import {
   getFirestore, collection, addDoc, updateDoc, deleteDoc, doc,
   onSnapshot, query, orderBy
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+import {
+  getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
 
 var firebaseConfig = {
   apiKey: "AIzaSyC9AEfuPhuBpmzW1yh9xfin2amic79gtyo",
@@ -741,12 +798,57 @@ var firebaseConfig = {
 
 var fbApp = initializeApp(firebaseConfig);
 var db = getFirestore(fbApp);
+var auth = getAuth(fbApp);
+var isCouncil = false;
 
 function showSyncError(context) {
   console.error('Firebase error:', context);
   var el = document.getElementById('syncStatus');
   if (el) { el.textContent = 'Could not sync — check your connection.'; el.style.display = 'block'; }
 }
+
+// ---------------- council sign-in (gates the platform board only) ----------------
+(function () {
+  var authBtn = document.getElementById('authBtn');
+  var authOverlay = document.getElementById('authOverlay');
+  var authEmail = document.getElementById('authEmail');
+  var authPassword = document.getElementById('authPassword');
+  var authError = document.getElementById('authError');
+
+  onAuthStateChanged(auth, function (user) {
+    isCouncil = !!user;
+    authBtn.textContent = isCouncil ? ('✓ ' + user.email) : '🔒 Council sign in';
+    authBtn.classList.toggle('signed-in', isCouncil);
+    if (typeof window.__renderPlatformBoard === 'function') window.__renderPlatformBoard();
+  });
+
+  authBtn.addEventListener('click', function () {
+    if (isCouncil) {
+      signOut(auth);
+    } else {
+      authEmail.value = '';
+      authPassword.value = '';
+      authError.style.display = 'none';
+      authOverlay.classList.add('open');
+      setTimeout(function () { authEmail.focus(); }, 50);
+    }
+  });
+
+  function closeAuthModal() { authOverlay.classList.remove('open'); }
+  document.getElementById('authModalClose').addEventListener('click', closeAuthModal);
+  document.getElementById('authCancelBtn').addEventListener('click', closeAuthModal);
+  authOverlay.addEventListener('click', function (e) { if (e.target === authOverlay) closeAuthModal(); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && authOverlay.classList.contains('open')) closeAuthModal();
+  });
+
+  document.getElementById('authSignInBtn').addEventListener('click', function () {
+    authError.style.display = 'none';
+    signInWithEmailAndPassword(auth, authEmail.value.trim(), authPassword.value)
+      .then(function () { closeAuthModal(); })
+      .catch(function () { authError.style.display = 'block'; });
+  });
+})();
 
 (function () {
   var pinColors = ['var(--pin-red)', 'var(--pin-teal)', 'var(--pin-gold)', 'var(--pin-blue)'];
@@ -836,38 +938,57 @@ function showSyncError(context) {
 
       var photoHtml = item.photo ? '<img class="card-photo" src="' + item.photo + '" alt="">' : '';
 
+      var checkHtml = isCouncil
+        ? '<button class="check-btn" aria-label="Mark done" data-action="toggle">' + (item.done ? '✓' : '') + '</button>'
+        : '<span class="check-btn" aria-hidden="true" style="cursor:default;">' + (item.done ? '✓' : '') + '</span>';
+      var deleteHtml = isCouncil ? '<button class="delete-btn" data-action="delete">remove</button>' : '';
+
       card.innerHTML =
         '<span class="card-pin" style="background:' + pinColor + '"></span>' +
         '<div class="card-top">' +
-          '<button class="check-btn" aria-label="Mark done" data-action="toggle">' + (item.done ? '✓' : '') + '</button>' +
+          checkHtml +
           '<h3 class="card-title">' + escapeHtml(item.title) + '</h3>' +
         '</div>' +
         (item.desc ? '<p class="card-desc">' + escapeHtml(item.desc) + '</p>' : '') +
         photoHtml +
         '<div class="card-footer">' +
           ribbonFor(item) +
-          '<button class="delete-btn" data-action="delete">remove</button>' +
+          deleteHtml +
         '</div>';
 
       grid.appendChild(card);
     });
 
-    var addTile = document.createElement('div');
-    addTile.className = 'add-tile';
-    addTile.id = 'addTile';
-    addTile.innerHTML = '<span class="plus">+</span><span>Add a platform</span>';
-    grid.appendChild(addTile);
-
-    if (items.length === 0) {
-      var note = document.createElement('div');
-      note.className = 'empty-note';
-      note.textContent = 'The board is empty — pin up your first platform item.';
-      grid.insertBefore(note, addTile);
+    if (isCouncil) {
+      var addTile = document.createElement('div');
+      addTile.className = 'add-tile';
+      addTile.id = 'addTile';
+      addTile.innerHTML = '<span class="plus">+</span><span>Add a platform</span>';
+      if (items.length === 0) {
+        var note = document.createElement('div');
+        note.className = 'empty-note';
+        note.textContent = 'The board is empty — pin up your first platform item.';
+        grid.appendChild(note);
+      }
+      grid.appendChild(addTile);
+    } else {
+      if (items.length === 0) {
+        var note = document.createElement('div');
+        note.className = 'empty-note';
+        note.textContent = 'The board is empty.';
+        grid.appendChild(note);
+      }
+      var note3 = document.createElement('div');
+      note3.className = 'lock-note';
+      note3.textContent = '🔒 Only signed-in council members can add or edit platform items.';
+      grid.appendChild(note3);
     }
 
     var done = items.filter(function (i) { return i.done; }).length;
     countsEl.textContent = items.length + ' pinned · ' + done + ' done';
   }
+
+  window.__renderPlatformBoard = render;
 
   function hashCode(str) {
     var hash = 0;
@@ -879,6 +1000,7 @@ function showSyncError(context) {
   }
 
   grid.addEventListener('click', function (e) {
+    if (!isCouncil) return;
     var actionEl = e.target.closest('[data-action]');
     if (actionEl) {
       var card = actionEl.closest('.card');
@@ -905,6 +1027,7 @@ function showSyncError(context) {
   var clearPhotoBtn = document.getElementById('clearPhoto');
 
   function openModal() {
+    if (!isCouncil) return;
     pendingPhoto = null;
     fTitle.value = '';
     fDesc.value = '';
@@ -949,6 +1072,7 @@ function showSyncError(context) {
   });
 
   document.getElementById('saveBtn').addEventListener('click', function () {
+    if (!isCouncil) return;
     var title = fTitle.value.trim();
     if (!title) {
       fTitle.focus();
